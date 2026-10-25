@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a companion, installation or gameplay problem.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Check docs/TROUBLESHOOTING.md first. Review logs before posting; do not upload saves, credentials or crash dumps. Seeker of Fire compatibility is not included in 0.26."
+  - type: input
+    id: version
+    attributes:
+      label: Mod version and installation method
+      placeholder: "0.26, Vortex or manual"
+    validations:
+      required: true
+  - type: input
+    id: companions
+    attributes:
+      label: Active companions and slots
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Area, bonfire or boss
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: What happened and how to reproduce it
+      description: Include expected behavior, death/travel/Talk triggers and whether a reload changes it.
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other mods and loaders
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt
+      description: Use F7 Mark a problem, then attach a reviewed/redacted journal excerpt or main log. Do not include personal files.
