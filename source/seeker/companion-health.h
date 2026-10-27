@@ -20,7 +20,7 @@ static void SaveCompanionHealth(){
 }
 static void LoadCompanionHealth(){
  wchar_t key[24],text[32];
- companionRegen=GetPrivateProfileIntW(L"companions",L"passiveRegen",0,ini.c_str())!=0;
+ companionRegen=GetPrivateProfileIntW(L"companions",L"passiveRegen",1,ini.c_str())!=0;
  for(int k=0;k<SlotCount;k++){
   swprintf_s(key,L"hpScale%d",k+1);GetPrivateProfileStringW(L"companions",key,L"1.0",text,32,ini.c_str());companionHpScale[k]=HpMultiplierSetting((float)_wtof(text));
   swprintf_s(key,L"group%d",k+1);groupEnabled[k]=GetPrivateProfileIntW(L"companions",key,0,ini.c_str())!=0;

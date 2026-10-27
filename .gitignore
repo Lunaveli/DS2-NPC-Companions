@@ -1,2 +1,4 @@
 source/out/
 source/third_party/minhook/
+npc-spawner/source/out/
+npc-spawner/source/third_party/minhook/

@@ -55,6 +55,7 @@ constexpr uintptr_t GameManagerRva=0x16148f0;
 static std::atomic<uintptr_t> flagManager{0};
 static std::atomic<int> currentMap{-1};
 static std::atomic<bool> menuOpen{false};
+static std::atomic<bool> hideCompanionLabels{false};
 
 static std::string JsonString(const char* text) {
  std::string out="\"";for(const unsigned char* p=(const unsigned char*)text;*p;p++) {
@@ -276,7 +277,6 @@ struct Slot {
 static Slot slots[SlotCount];
 static std::atomic<int> nextLaunchNpc[SlotCount]{{-1},{-1},{-1}};
 static int startupHigh[SlotCount]={},startupLow[SlotCount]={};
-static void ResetGestures();
 static SRWLOCK slotLock=SRWLOCK_INIT;
 static ScanResult scan;static bool scanned=false;
 static std::vector<uintptr_t> enemyTables;   // the game keeps more than one copy of EnemyParam (CHR_PARAM) in memory
@@ -300,14 +300,14 @@ static bool HeraldBlockedHere(int npc){return IsHerald(npc)&&GameMapId()==0x0a04
 static bool BlockedCompanionFlag(uint32_t id){
  if(GameMapId()!=0x0a040000)return false;
  for(int k=0;k<SlotCount;k++)if(IsHerald(slots[k].npc)){
-  if(id==HeraldEnabledFlags[k]||id==HeraldGestureFlags[k])return true;
+  if(id==HeraldEnabledFlags[k])return true;
   for(uint32_t f:SpawnerFlags[k])if(id==f)return true;
  }
  return false;
 }
 static bool HeraldTalking(int k){uintptr_t manager=flagManager.load();return manager&&originalFlag&&originalFlag(manager,HeraldBusyFlags[k])!=0;}
 static bool HeraldServiceBusy(int k){uintptr_t manager=flagManager.load();return !manager||!originalFlag||HeraldTalking(k)||originalFlag(manager,HeraldLevelFlags[k])!=0;}
-static void ProfileLogicFlags(int k,int* flags){flags[0]=flags[1]=flags[2]=flags[3]=0;if(IsHerald(slots[k].npc)){flags[0]=HeraldLevelFlags[k];flags[1]=104020149;flags[2]=HeraldGestureFlags[k];flags[3]=HeraldBusyFlags[k];}}
+static void ProfileLogicFlags(int k,int* flags){flags[0]=flags[1]=flags[2]=flags[3]=0;if(IsHerald(slots[k].npc)){flags[0]=HeraldLevelFlags[k];flags[1]=104020149;flags[3]=HeraldBusyFlags[k];}}
 static const char* NpcDisplayName(int npc){
  // Keep the historical names as settings keys: Thomas and Melinda each have
  // two distinct loadouts. Only the visible label drops the old role suffix.
@@ -508,6 +508,7 @@ static bool RequestPosition(uintptr_t actor,const float* target) {
   return true;
  } __except(EXCEPTION_EXECUTE_HANDLER){return false;}
 }
+#include "fall-guard.h"
 // Respawn a slot next to the player: pick its nearest usable spawner, move that spawner's copies beside the player,
 // switch the slot's flags off, then switch only that spawner's flag on.
 static void TeleportSlot(int k,const char* why) {
@@ -517,7 +518,9 @@ static void TeleportSlot(int k,const char* why) {
  float spot[3]={pp[0]+1.0f+0.8f*k,pp[1]+0.3f,pp[2]+1.0f-0.8f*k};
  if(slots[k].ctrl && slots[k].hp>0) {
   uintptr_t param=0;int hp=0;
+  if(FallGuardHold(k,why))return;
   if(ReadPtr(slots[k].ctrl+0x38,param)&&IsEnemyRow(param,Roster[slots[k].npc].enemy)&&ReadI32(slots[k].ctrl+0x168,hp)&&hp>0 && RequestPosition(slots[k].ctrl,spot)) {
+   FallGuardMoved(k,spot);
    slots[k].recallCtrl=slots[k].ctrl;slots[k].recallAt=GetTickCount64();slots[k].nextTeleport=GetTickCount64()+12000;
    for(int e=0;e<slots[k].extraCount;e++){float member[3];GroupSpot(k,e,pp,member);RequestPosition(slots[k].extras[e],member);}
    Log("%s slot %d: live position request to (%.1f, %.1f, %.1f); spawner left on",why,k+1,spot[0],spot[1],spot[2]);
@@ -543,7 +546,6 @@ static void TeleportSlot(int k,const char* why) {
 static void SetActive(int k,bool on) {
  int selected=nextLaunchNpc[k].load();if(selected<0)selected=slots[k].npc;
  if(on&&HeraldBlockedHere(selected)){Log("Summon slot %d blocked: companion Herald is unavailable in Majula",k+1);Trace("herald_majula_block",",\"source\":\"summon\"");return;}
- if(!on)ResetGestures();
  slots[k].active=on;SaveSlots();
  if(on){if(nextLaunchNpc[k].load()<0){slots[k].autoTeleports=0;TeleportSlot(k,"Summon");}}
  else {slots[k].keepHp=0;slots[k].oldCtrl=0;SlotFlagsOff(k);Log("Dismiss slot %d (%s)",k+1,Roster[slots[k].npc].name);}
@@ -551,7 +553,7 @@ static void SetActive(int k,bool on) {
 static void ApplyNpcSelection(int k,int npc) {
  uintptr_t host=PlayerCtrl();int hp=0;if(!host||GameStep()!=30||!ReadI32(host+0x168,hp)||hp<=0||resourceLeases[npc].state.load()!=2)return;
  SetRealFlag(HeraldEnabledFlags[k],false);SetRealFlag(HeraldBusyFlags[k],false);
- ResetGestures();
+ 
  // An explicit NPC change replaces the old actor; automatic recall never takes this path.
  if(slots[k].active){SlotFlagsOff(k);Sleep(700);if(PlayerCtrl()!=host||GameStep()!=30||!ReadI32(host+0x168,hp)||hp<=0||resourceLeases[npc].state.load()!=2)return;}
  slots[k].ctrl=0;slots[k].hp=slots[k].maxHp=0;slots[k].distance=-1;
@@ -583,6 +585,7 @@ static void UpdateNpcRequests(){
  if(a!=loads||b!=releases||c!=corrections||d!=failures){loads=a;releases=b;corrections=c;failures=d;Log("Native resources: loads %u, balanced releases %u, generator release corrections %u, failures %u, ownership overflow %u",a,b,c,d,generatorResourceOverflow.load());}
 }
 // Store slot k's other group members: place newly created ones beside the player, recall far ones, apply HP options.
+static bool DeferGroupRecall(int k,uintptr_t actor,float distance,const float* pos,ULONGLONG now);
 static void UpdateGroupMembers(int k,const uintptr_t* members,int count,const float* pp) {
  Slot& s=slots[k];ULONGLONG now=GetTickCount64();ULONGLONG moveAt[SpawnersPerSlot-1]={};int hp[SpawnersPerSlot-1]={};
  for(int e=0;e<count;e++) {
@@ -590,7 +593,7 @@ static void UpdateGroupMembers(int k,const uintptr_t* members,int count,const fl
   float pos[3]={},spot[3];int maxHp=0;ReadVec(members[e]+0x90,pos);float d=Distance(pos,pp);GroupSpot(k,e,pp,spot);
   moveAt[e]=previous>=0?s.extraMoveAt[previous]:0;
   // A new member appears at its spawner's map anchor; a known one is recalled only when left far behind.
-  if((previous<0&&d>8.0f)||(previous>=0&&d>25.0f&&now>=moveAt[e])){if(RequestPosition(members[e],spot))Log("Slot %d group member %d: position request from %.1f m",k+1,e+2,d);moveAt[e]=now+12000;}
+  if((previous<0&&d>8.0f)||(previous>=0&&d>25.0f&&now>=moveAt[e]&&!DeferGroupRecall(k,members[e],d,pos,now))){if(RequestPosition(members[e],spot))Log("Slot %d group member %d: position request from %.1f m",k+1,e+2,d);moveAt[e]=now+12000;}
   UpdateCompanionHealth(k,members[e],now,hp[e],maxHp);
  }
  if(count!=s.extraCount)Log("Slot %d (%s) group: %d of %d members present",k+1,Roster[s.npc].name,count+(s.ctrl?1:0),GroupCount(k));
@@ -707,8 +710,10 @@ static void TraceDeathActors(uintptr_t player) {
  for(const auto& slot:slots)if(OwnedCompanion(player,slot)){owned++;int hp=0;if(ReadI32(slot.ctrl+0x168,hp)&&hp>0)alive++;}
  char b[128];snprintf(b,sizeof(b),",\"tracked_actors_remaining\":%d,\"tracked_actors_alive\":%d",owned,alive);Trace("host_death_cleanup_progress",b);
 }
-#include "gestures.h"
+#include "boss-room-recall.h"
 #include "native-features.h"
+#include "recall-filter.h"
+#include "rosabeth-spawn-profile.h"
 
 // Camera research for name/HP labels above heads: log 4x4 matrices one or two pointers from the game manager whose
 // translation is within 15 m of the player and whose rotation part is orthonormal (a camera world matrix).
@@ -767,7 +772,7 @@ static DWORD WINAPI Companion(void*) {
    lastMap=map;
    if(player)Log("Player loaded (0x%llx).",(unsigned long long)player);else Log("Loading screen (player 0x%llx gone).",(unsigned long long)lastPlayer);
    if(!registEdits.empty()){Log("Host identity changed with %d unrestored registration edits; dropping stale addresses",(int)registEdits.size());registEdits.clear();}
-   ResetGestures();scaledEnemies.clear();lastPlayer=player;playerSince=now;scanned=false;discovering=false;nextScan=0;scanCursor=0x10000;scan=ScanResult();enemyTables.clear();for(int k=0;k<SlotCount;k++)slots[k].loadChecked=false;if(!player)for(bool& b:hasMovedSpot)b=false;   // a new map re-creates its spawners
+   scaledEnemies.clear();lastPlayer=player;playerSince=now;scanned=false;discovering=false;nextScan=0;scanCursor=0x10000;scan=ScanResult();enemyTables.clear();for(int k=0;k<SlotCount;k++)slots[k].loadChecked=false;if(!player)for(bool& b:hasMovedSpot)b=false;   // a new map re-creates its spawners
    for(int k=0;k<SlotCount;k++){if(slots[k].ctrl && slots[k].hp>0){slots[k].keepHp=slots[k].hp;slots[k].oldCtrl=slots[k].ctrl;}slots[k].ctrl=0;slots[k].extraCount=0;GroupAreaReset(k);slots[k].nextTeleport=0;slots[k].triedSpawners=0;slots[k].autoTeleports=0;slots[k].missingRetries=0;slots[k].stuckTeleports=0;slots[k].stuckSince=0;slots[k].missingSince=0;if(player)SlotFlagsOff(k);}
    if(!player){flagManager=0;hostDying=false;Log("Host unloaded: cached flag manager discarded; game writes paused");Snapshot("host_unloaded");}
    // All companion flags stay off while the area loads; they are switched on next to the player after the scan
@@ -775,11 +780,11 @@ static DWORD WINAPI Companion(void*) {
   }
   int phase=GameStep();
   if(phase!=30)heraldSessionHost=0;
-  else if(player&&heraldSessionHost!=player){for(int k=0;k<SlotCount;k++){SetRealFlag(HeraldBusyFlags[k],false);SetRealFlag(HeraldLevelFlags[k],false);SetRealFlag(HeraldGestureFlags[k],false);}heraldSessionHost=player;}
+  else if(player&&heraldSessionHost!=player){for(int k=0;k<SlotCount;k++){SetRealFlag(HeraldBusyFlags[k],false);SetRealFlag(HeraldLevelFlags[k],false);}heraldSessionHost=player;}
   if(phase!=lastPhase){
    Log("Game step transition %d -> %d, host 0x%llx",lastPhase,phase,(unsigned long long)player);Snapshot("game_step_changed");
    if(lastPhase==30 && phase==31 && player){
-    ResetGestures();
+    
     Log("Outgoing step 31: stopping companion generators before host teardown");
     for(int k=0;k<SlotCount;k++){Log("Transition cleanup slot %d begin",k+1);int cleared=SlotFlagsOff(k);Log("Transition cleanup slot %d end: %d of 4 flags cleared",k+1,cleared);}
     Log("Outgoing step 31: restored %d registration rows to their map-load resource IDs",RestoreRegistMemory());
@@ -788,11 +793,13 @@ static DWORD WINAPI Companion(void*) {
    if(phase==30 && lastPhase!=-1){scanned=false;discovering=false;nextScan=0;scanCursor=0x10000;for(auto& slot:slots){slot.observedMovement=false;slot.nextTeleport=0;}}
    lastPhase=phase;
   }
+  if(phase!=30)TickBossRoomRecall(0,now);
   if(phase!=30){Sleep(50);continue;}
   int hostHp=0;bool hostReadable=player && ReadI32(player+0x168,hostHp);
   if(!hostReadable || hostHp<=0) {
+   TickBossRoomRecall(0,now);
    if(hostReadable && !hostDying){hostDying=true;Log("Host death detected: pausing companion generation");Snapshot("host_death");
-    ResetGestures();
+    
     Log("Host death: restored %d registration rows before stopping generators",RestoreRegistMemory());
     for(int k=0;k<SlotCount;k++){Log("Death cleanup slot %d begin",k+1);SlotFlagsOff(k);Log("Death cleanup slot %d end",k+1);}
     int released=ReleaseCompanionsOnHostDeath(player);Log("Host death: requested ordinary KO for %d live tracked companions; saved HP retained",released);nextDeathTrace=0;
@@ -802,7 +809,6 @@ static DWORD WINAPI Companion(void*) {
   }
   if(hostDying){hostDying=false;RestoreRegistMemory();lastPlayer=0;Log("Host recovered: reinitializing companion session");continue;}
   if(now>=nextSnapshot){nextSnapshot=now+2000;Snapshot("status");PlayerOptionsTelemetry();int capacity=0,available=0;if(ReadAnimationPoolUsage(image,capacity,available)){char b[144];snprintf(b,sizeof(b),",\"capacity\":%d,\"available\":%d,\"used\":%d",capacity,available,capacity-available);Trace("animation_resource_pool",b);}}
-  UpdateGestures(player,now);
   if(player && now-playerSince>=1500 && (discovering || !scanned || map!=scanMap || now>=nextScan)) {
    if(!discovering || map!=scanMap){pendingScan=ScanResult();scanCursor=0x10000;scanMap=map;discovering=true;}
    if(ScanMemory(pendingScan,scanMap)) {
@@ -829,6 +835,7 @@ static DWORD WINAPI Companion(void*) {
    }
   }
   {std::deque<std::function<void()>> work;{std::lock_guard<std::mutex> g(queueLock);work.swap(queue);}for(auto& w:work)w();}
+  TickRosabethSpawnProfile(player,now);
   UpdateNpcRequests();
   if(player && now>=nextUpdate) {
    nextUpdate=now+500;float pp[3];
@@ -836,6 +843,8 @@ static DWORD WINAPI Companion(void*) {
     UpdateSlots(player,pp);
     UpdateWorldHealth(player);
     UpdateGroupSpawns(pp,now);
+    FallGuardTick(pp,now);
+    TickBossRoomRecall(player,now);
     for(int k=0;k<SlotCount;k++){bool blocked=HeraldBlockedHere(slots[k].npc);SetRealFlag(HeraldEnabledFlags[k],slots[k].active&&IsHerald(slots[k].npc)&&!blocked);if(blocked)SlotFlagsOff(k);}
     TraceHeraldLevelRequests(player,now);
     if(map!=recallHint){
@@ -847,11 +856,13 @@ static DWORD WINAPI Companion(void*) {
      if(HeraldBlockedHere(s.npc))continue;
      const char* recall=nullptr;
      if(s.active && s.ctrl && s.hp>0&&!HeraldTalking(k))recall=ObserveRecall(s,pp,now);
+     if(recall&&DeferAutomaticRecall(k,recall,pp,now))recall=nullptr;
      if(s.active && s.ctrl && s.hp>0 && s.needsPlacement && now>=s.nextTeleport){
       s.needsPlacement=false;s.placementAttempts++;
       if(s.distance>8.0f){s.nextTeleport=now+12000;TeleportSlot(k,"Spawn placement");continue;}
      }
      if(!s.active || !scanned || now-playerSince<4000 || now<s.nextTeleport || now-s.respawnedAt<4000)continue;
+     if(!recall&&TunnelFallbackNeeded(k,pp,now))recall="Auto (tunnel boundary fallback)";
      bool missing=(!s.ctrl || s.hp<=0) && s.missingSince && now-s.missingSince>3000;
      if(recall){s.nextTeleport=now+12000;s.observedMovement=false;TeleportSlot(k,recall);}
      else if(missing&&nextLaunchNpc[k].load()<0){s.missingRetries++;s.nextTeleport=now+10000;TeleportSlot(k,"Auto (missing)");}
@@ -971,12 +982,34 @@ static void HeadLabels(ImDrawList* dl,const Slot* view,const ImVec2& size,float 
   dl->AddRectFilled(ImVec2(at.x-w*0.5f-1,at.y-h-1),ImVec2(at.x+w*0.5f+1,at.y+1),IM_COL32(0,0,0,170));
   dl->AddRectFilled(ImVec2(at.x-w*0.5f,at.y-h),ImVec2(at.x-w*0.5f+w*f,at.y),IM_COL32(170,25,25,255));
  }
-}static void DrawOverlay() {
+}// ---- 0.44 menu tabs: White summons (summons + story NPCs), Dark summons (invaders), Miscellaneous (the rest) ----
+enum class NpcTab {White,Dark,Misc};
+static NpcTab TabFor(int i){
+ if(strstr(Roster[i].name,"(Invader)"))return NpcTab::Dark;
+ if(Roster[i].enemy<990700||!strncmp(Roster[i].from,"Story",5))return NpcTab::White;
+ return NpcTab::Misc;
+}
+static void NpcTable(NpcTab tab,const Slot* view,float scale){
+ if(!ImGui::BeginTable("##npcs",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_ScrollY|ImGuiTableFlags_SizingStretchProp,ImVec2(0,(std::max)(160*scale,ImGui::GetContentRegionAvail().y-4*scale))))return;
+ ImGui::TableSetupColumn("Companion",ImGuiTableColumnFlags_WidthStretch,1.0f);ImGui::TableSetupColumn("Area / role",ImGuiTableColumnFlags_WidthStretch,1.2f);ImGui::TableSetupColumn("Use in slot",ImGuiTableColumnFlags_WidthFixed,110*scale);
+ ImGui::TableSetupScrollFreeze(0,1);ImGui::TableHeadersRow();
+ for(int i=0;i<RosterCount;i++){
+  if(TabFor(i)!=tab)continue;ImGui::PushID(i);ImGui::TableNextRow();
+  ImGui::TableNextColumn();ImGui::TextUnformatted(NpcDisplayName(i));
+  ImGui::TableNextColumn();ImGui::TextDisabled("%s",Roster[i].from);
+  ImGui::TableNextColumn();
+  for(int k=0;k<SlotCount;k++){int current=nextLaunchNpc[k].load();if(current<0)current=view[k].npc;char b[8];snprintf(b,sizeof(b),"%d",k+1);
+   if(k)ImGui::SameLine();ImGui::BeginDisabled(current==i||nextLaunchNpc[k].load()>=0);if(ImGui::SmallButton(b))Enqueue([k,i]{ChooseNpc(k,i);});ImGui::EndDisabled();}
+  ImGui::PopID();
+ }
+ ImGui::EndTable();
+}
+static void DrawOverlay() {
  ImGuiIO& io=ImGui::GetIO();io.MouseDrawCursor=menuOpen.load();
  static bool wasOpen=false;if(menuOpen.load() && !wasOpen){RECT rc;GetClientRect(gameWindow,&rc);POINT c={(rc.right-rc.left)/2,(rc.bottom-rc.top)/2};ClientToScreen(gameWindow,&c);originalSetCursorPos(c.x,c.y);}wasOpen=menuOpen.load();
  float scale=io.DisplaySize.y/1080.0f;if(scale<1)scale=1;io.FontGlobalScale=scale;
  Slot view[SlotCount];AcquireSRWLockShared(&slotLock);for(int k=0;k<SlotCount;k++)view[k]=slots[k];ReleaseSRWLockShared(&slotLock);
- HeadLabels(ImGui::GetBackgroundDrawList(),view,io.DisplaySize,scale);
+ if(!hideCompanionLabels.load())HeadLabels(ImGui::GetBackgroundDrawList(),view,io.DisplaySize,scale);
  // Party panel (top-left, under the player's own bars): name + HP of every companion that is present.
  bool any=false;for(auto& s:view)if(s.active && s.ctrl)any=true;
  if(any) {
@@ -990,17 +1023,17 @@ static void HeadLabels(ImDrawList* dl,const Slot* view,const ImVec2& size,float 
  }
  if(!menuOpen.load())return;
  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x*0.5f,io.DisplaySize.y*0.5f),ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
- ImGui::Begin("NPC Companions  (F7 to close)",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings);
+ static bool menuSizeLoaded=false;static ImVec2 menuSize;
+ if(!menuSizeLoaded){menuSize=ImVec2((float)GetPrivateProfileIntW(L"overlay",L"menuWidth",1250,ini.c_str())*scale,(float)GetPrivateProfileIntW(L"overlay",L"menuHeight",820,ini.c_str())*scale);menuSizeLoaded=true;}
+ ImGui::SetNextWindowSize(menuSize,ImGuiCond_FirstUseEver);ImGui::SetNextWindowSizeConstraints(ImVec2(760*scale,420*scale),ImVec2(100000.0f,100000.0f));
+ ImGui::Begin("NPC Companions  (F7 to close)",nullptr,ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings);
+ // Drag an edge or the corner to resize; the size is kept in settings.ini once the mouse is released.
+ {ImVec2 now=ImGui::GetWindowSize();if((now.x!=menuSize.x||now.y!=menuSize.y)&&!ImGui::IsMouseDown(0)){menuSize=now;wchar_t v[16];swprintf_s(v,L"%d",(int)(now.x/scale));WritePrivateProfileStringW(L"overlay",L"menuWidth",v,ini.c_str());swprintf_s(v,L"%d",(int)(now.y/scale));WritePrivateProfileStringW(L"overlay",L"menuHeight",v,ini.c_str());}}
+ ImGui::SeparatorText("Party (summon, dismiss, bring)");
  for(int k=0;k<SlotCount;k++) {
   ImGui::PushID(k);
-  ImGui::Text("Slot %d",k+1);ImGui::SameLine(80*scale);
-  ImGui::SetNextItemWidth(320*scale);
   int selected=nextLaunchNpc[k].load();if(selected<0)selected=view[k].npc;
-  if(ImGui::BeginCombo("##npc",NpcDisplayName(selected))) {
-   for(int i=0;i<RosterCount;i++){ImGui::PushID(i);char item[160];snprintf(item,sizeof(item),"%s  (%s)",NpcDisplayName(i),Roster[i].from);if(ImGui::Selectable(item,i==selected) && i!=selected)Enqueue([k,i]{ChooseNpc(k,i);});ImGui::PopID();}
-   ImGui::EndCombo();
-  }
-  ImGui::SameLine();
+  ImGui::Text("Slot %d",k+1);ImGui::SameLine(80*scale);ImGui::TextUnformatted(NpcDisplayName(selected));ImGui::SameLine(420*scale);
   bool heraldBlocked=HeraldBlockedHere(selected);
   ImGui::BeginDisabled(!view[k].active&&heraldBlocked);
   if(ImGui::Button(view[k].active?"Dismiss":"Summon",ImVec2(100*scale,0))){bool on=!view[k].active;Enqueue([k,on]{SetActive(k,on);});}
@@ -1035,21 +1068,23 @@ static void HeadLabels(ImDrawList* dl,const Slot* view,const ImVec2& size,float 
    if(ImGui::Button("Level up with the Herald"))Enqueue([k]{HeraldLevelUp(k);});ImGui::EndDisabled();
    ImGui::TextDisabled("Approach her and use the game's Talk prompt for dialogue and services. F7 level up is also available within 5 m.");
   }
-  if(!strcmp(Roster[view[k].npc].name,"Rosabeth of Melfia"))ImGui::TextDisabled("Rosabeth uses her native combat profile. Outfit and skin are unchanged.");
+  if(!strcmp(Roster[view[k].npc].name,"Rosabeth of Melfia"))ImGui::TextDisabled("Rosabeth copies gifted clothes at her next native spawn. Rest at a bonfire after gifting. Skin and native combat are retained.");
   ImGui::PopID();
  }
+ if(ImGui::BeginTabBar("##tabs")){
+  if(ImGui::BeginTabItem("White summons")){NpcTable(NpcTab::White,view,scale);ImGui::EndTabItem();}
+  if(ImGui::BeginTabItem("Dark summons")){NpcTable(NpcTab::Dark,view,scale);ImGui::EndTabItem();}
+  if(ImGui::BeginTabItem("Miscellaneous")){NpcTable(NpcTab::Misc,view,scale);ImGui::EndTabItem();}
+  if(ImGui::BeginTabItem("Options")){ImGui::BeginChild("##options");
  ImGui::Separator();
  ImGui::TextDisabled("NPC selections load automatically. Original quest NPCs remain separate.");
  ImGui::TextDisabled("F8: bring all companions to you. Companions follow normally; recall handles long separation, stationary stragglers and elevator transitions.");
  ImGui::TextDisabled("Spawners use fixed map anchors; newly created companions are brought to you.");
  ImGui::Separator();
- if(ImGui::Button("Mark area complete"))Enqueue([]{Log("AREA COMPLETE checkpoint %d",areaMarker.load()+1);Snapshot("area_complete");areaMarker++;});
- ImGui::SameLine();if(ImGui::Button("Mark a problem"))Enqueue([]{Log("USER PROBLEM MARKER");Snapshot("problem_marker");});
- ImGui::TextDisabled("Session logs: NPCCompanionsSeeker/logs. Mark the area before moving on.");
- ImGui::Separator();
- bool gestures=mirrorGestures.load();
- if(ImGui::Checkbox("Companions respond to your gestures when idle",&gestures)){mirrorGestures=gestures;WritePrivateProfileStringW(L"companions",L"mirrorGestures",gestures?L"1":L"0",ini.c_str());}
- ImGui::TextDisabled("Herald uses her own animation. Combat, casting, Talk and leveling take priority.");
+ bool hideLabels=hideCompanionLabels.load();
+ if(ImGui::Checkbox("Hide floating companion names and HP bars",&hideLabels)){hideCompanionLabels=hideLabels;WritePrivateProfileStringW(L"companions",L"hideFloatingLabels",hideLabels?L"1":L"0",ini.c_str());}
+ ImGui::TextDisabled("Hides both labels above summons. The party panel stays visible.");
+ ImGui::TextDisabled("Herald rests in her own native idle pose when nearby. Talk and leveling take priority.");
  ImGui::Separator();
  bool hpEnabled=enemyHpEnabled.load();float hpSelected=enemyHpSelected.load();
  if(ImGui::Checkbox("Scale enemy and boss HP",&hpEnabled))SetWorldHpOptions(hpEnabled,hpSelected,true);
@@ -1071,9 +1106,23 @@ static void HeadLabels(ImDrawList* dl,const Slot* view,const ImVec2& size,float 
  if(ImGui::Checkbox("Open area fog walls (not boss doors)",&fog)){openFog=fog;WritePrivateProfileStringW(L"world",L"openFog",fog?L"1":L"0",ini.c_str());if(fog)Enqueue([]{OpenAreaFogWalls("Menu");});}
  ImGui::TextDisabled("Opened fog walls stay open in this save (.sfc) even if you turn this off later.");
  ImGui::Separator();
+ bool bossRecall=autoBossRecall.load();
+ if(ImGui::Checkbox("Bring companions into boss rooms automatically",&bossRecall)){autoBossRecall=bossRecall;WritePrivateProfileStringW(L"companions",L"autoBossRecall",bossRecall?L"1":L"0",ini.c_str());}
+ ImGui::TextDisabled("Recalls once after the native boss health bar appears and entry animations finish. F8 is the manual fallback.");
+ bool careful=conservativeRecall.load();
+ if(ImGui::Checkbox("Reduce unnecessary automatic teleports",&careful)){conservativeRecall=careful;WritePrivateProfileStringW(L"companions",L"conservativeRecall",careful?L"1":L"0",ini.c_str());}
+ ImGui::TextDisabled("Lets fighting companions hold position and gives nearby followers more time. Emergency recovery stays active.");
+ bool tunnel=tunnelRecovery.load();
+ if(ImGui::Checkbox("Recover companions stuck at tunnel boundaries",&tunnel)){tunnelRecovery=tunnel;WritePrivateProfileStringW(L"companions",L"tunnelRecovery",tunnel?L"1":L"0",ini.c_str());}
+ bool guard=fallGuard.load();
+ if(ImGui::Checkbox("Fall guard for companion teleports (test)",&guard)){fallGuard=guard;WritePrivateProfileStringW(L"companions",L"fallGuard",guard?L"1":L"0",ini.c_str());}
+ ImGui::TextDisabled("Holds companion moves while area data loads; brings back a companion that drops after a move.");
  bool regen=companionRegen.load();
  if(ImGui::Checkbox("Passive HP regeneration for companions",&regen)){companionRegen=regen;SaveCompanionHealth();}
  ImGui::TextDisabled("Companions recover %d HP per second while alive. HP scale sliders set each slot's max HP (1.0x-99.0x).",CompanionRegenPerSecond);
+   ImGui::EndChild();ImGui::EndTabItem();}
+  ImGui::EndTabBar();
+ }
  ImGui::End();
 }
 static HRESULT WINAPI HookPresent(IDXGISwapChain* chain,UINT sync,UINT flags) {
@@ -1142,17 +1191,26 @@ static bool CopySavesOnce() {
  }while(FindNextFileW(h,&d));FindClose(h);return ok;
 }
 
-extern "C" __declspec(dllexport) DWORD WINAPI Initialize(void*) {
+static bool pluginMode=false;
+static INIT_ONCE initializeOnce=INIT_ONCE_STATIC_INIT;static DWORD initializeResult=0;
+static DWORD InitializeOnce();
+static BOOL CALLBACK RunInitialize(PINIT_ONCE,void*,void**){initializeResult=InitializeOnce();return TRUE;}
+extern "C" __declspec(dllexport) DWORD WINAPI Initialize(void*) {InitOnceExecuteOnce(&initializeOnce,RunInitialize,nullptr,nullptr);return initializeResult;}
+static DWORD InitializeOnce() {
  wchar_t modulePath[MAX_PATH];if(!GetModuleFileNameW(selfModule,modulePath,MAX_PATH))return 1;
  wchar_t* slash=wcsrchr(modulePath,L'\\');if(!slash)return 2;*slash=0;root=modulePath;
+ // Loaded from Game\dllMods (Lazy Loader): the data folder is Game\\NPCCompanionsSeeker.
+ if(GetFileAttributesW((root+L"\\assets").c_str())==INVALID_FILE_ATTRIBUTES){wchar_t exe[MAX_PATH];if(GetModuleFileNameW(nullptr,exe,MAX_PATH)){wchar_t* s2=wcsrchr(exe,L'\\');if(s2)*s2=0;root=std::wstring(exe)+L"\\NPCCompanionsSeeker";}}
  assets=root+L"\\assets";ini=root+L"\\settings.ini";logPath=root+L"\\NPCCompanions.log";
  seekerBase=root.substr(0,root.find_last_of(L"\\"))+L"\\SeekerOfFire_2";
  image=(uintptr_t)GetModuleHandleW(nullptr);ownPid=GetCurrentProcessId();
  SYSTEMTIME journalTime;GetSystemTime(&journalTime);wchar_t journalName[160];swprintf_s(journalName,L"\\logs\\session-%04u%02u%02u-%02u%02u%02u-%lu.jsonl",journalTime.wYear,journalTime.wMonth,journalTime.wDay,journalTime.wHour,journalTime.wMinute,journalTime.wSecond,ownPid);
  CreateDirectoryW((root+L"\\logs").c_str(),nullptr);tracePath=root+journalName;
- Trace("session_start",",\"version\":\"seeker-0.6\",\"schema\":1,\"exe_sha256_expected\":\"0045931b8914504531b7864a9488d396dc50cbaf524964016e1d69c3d1173131\"");
- Log("==== NPC Companions + Seeker 0.6 test build (5 Sunken King/Pursuer companions; companion HP regen, HP scale, mob groups of up to 6, staggered group spawns; source-native combat profiles; native targeting; host lock guard; local following, native mobs, animation pool repair) ====");
- {bool expanded=false;if(!AnimationPoolPatchState(image,expanded)||!expanded){Log("Animation registry capacity patch missing; refusing companion startup.");return 11;}int capacity=0,available=0;if(ReadAnimationPoolUsage(image,capacity,available)&&capacity!=(int)AnimationPoolCapacity){Log("Animation registry initialized too early with capacity %d; refusing companion startup.",capacity);return 12;}Log("Animation resource registry: constructor capacity %u, allocation %u bytes; all three operands verified.",AnimationPoolCapacity,AnimationPoolBytes);}
+ Trace("session_start",",\"version\":\"seeker-0.6.11\",\"schema\":1,\"exe_sha256_expected\":\"0045931b8914504531b7864a9488d396dc50cbaf524964016e1d69c3d1173131\"");
+ Log("==== NPC Companions + Seeker 0.6.11 test build (tabbed menu, Lazy Loader support; offensive HP gates removed, native boss phase/curse dispatch; automatic boss-room entry recall; 100 m panoramic/vertical perception, conservative recall filter; combat target retention, native Herald idle, gesture mirroring removed; repeat boss attacks, boss-fog checks removed, optional floating labels; neutral Herald; white-phantom category for mob/boss companions; fall guard; companion AI: boss-fog checks removed, boss-mode redirects suppressed, action completion guards; 5 Sunken King/Pursuer companions; companion HP regen, HP scale, mob groups of up to 6, staggered group spawns; source-native combat profiles; native targeting; host lock guard; local following, native mobs, animation pool repair) ====");
+ if(GetModuleHandleW(L"NPCSpawner.dll")){Log("NPC Spawner with Progression is also loaded. Disable one of the two mods; refusing startup.");return 13;}
+ if(pluginMode)Log("Loaded as a plugin (dllMods / Lazy Loader).");
+ {bool expanded=false;if(!AnimationPoolPatchState(image,expanded)||!expanded){if(pluginMode)Log("WARNING: animation pool expansion unavailable (the loader started this mod late). Large areas such as No-man's Wharf may crash; use the bundled loader if they do.");else{Log("Animation registry capacity patch missing; refusing companion startup.");return 11;}}int capacity=0,available=0;if(ReadAnimationPoolUsage(image,capacity,available)&&capacity!=(int)AnimationPoolCapacity){Log("Animation registry initialized too early with capacity %d; refusing companion startup.",capacity);return 12;}Log("Animation resource registry: constructor capacity %u, allocation %u bytes; all three operands verified.",AnimationPoolCapacity,AnimationPoolBytes);}
  size_t verifiedBase=0;if(!ValidateSeekerInputs(seekerBase,verifiedBase)){Log("Seeker base fingerprint mismatch after %zu inputs; reinstall the matching compatibility patch. No hooks enabled.",verifiedBase);return 10;}
  Log("Seeker of Fire 2.1.4 base verified: %zu merged inputs; overlay first, Seeker fallback, then original archives. Save .sfc.",verifiedBase);
  for(const auto& s:Signatures)if(memcmp((void*)(image+s.rva),s.bytes,s.size)!=0){Log("Unsupported executable or conflicting patch. Refusing startup.");return 4;}
@@ -1160,11 +1218,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI Initialize(void*) {
  if(!Patch(image+OfflineRva,offline,sizeof(offline)) || !Patch(image+SaveRva+2,extension,sizeof(extension))){Log("Protection patches failed.");return 5;}
  if(!CopySavesOnce())return 6;
  openFog=GetPrivateProfileIntW(L"world",L"openFog",0,ini.c_str())!=0;
+ autoBossRecall=GetPrivateProfileIntW(L"companions",L"autoBossRecall",1,ini.c_str())!=0;
  LoadWorldHpOptions();
  LoadPlayerOptions();
  LoadCompanionHealth();
- mirrorGestures=GetPrivateProfileIntW(L"companions",L"mirrorGestures",1,ini.c_str())!=0;
- {const unsigned char proof[]={0x89,0x43,0x5c,0x80,0x4b,0x0d,0x01};gestureLayoutReady=memcmp((void*)(image+0x1fc2da),proof,sizeof(proof))==0;Log("Native gesture request layout: %s",gestureLayoutReady?"verified":"unavailable; mirroring disabled");}
+ hideCompanionLabels=GetPrivateProfileIntW(L"companions",L"hideFloatingLabels",1,ini.c_str())!=0;
+ tunnelRecovery=GetPrivateProfileIntW(L"companions",L"tunnelRecovery",1,ini.c_str())!=0;
+ conservativeRecall=GetPrivateProfileIntW(L"companions",L"conservativeRecall",1,ini.c_str())!=0;
+ fallGuard=GetPrivateProfileIntW(L"companions",L"fallGuard",1,ini.c_str())!=0;
  LoadSlots();cameraFov=(float)GetPrivateProfileIntW(L"overlay",L"fov",55,ini.c_str());
  for(int k=0;k<SlotCount;k++){startupHigh[k]=Roster[slots[k].npc].high;startupLow[k]=Roster[slots[k].npc].low;}
  for(int k=0;k<SlotCount;k++)Log("Slot %d: %s, %s, NPC record files patched: %d",k+1,Roster[slots[k].npc].name,slots[k].active?"active":"dismissed",PatchRegistFiles(k));
@@ -1172,17 +1233,23 @@ extern "C" __declspec(dllexport) DWORD WINAPI Initialize(void*) {
  grow=(GrowFn)(image+GrowRva);
  resourceApi={(decltype(resourceApi.characterLoad))(image+CharacterLoadRva),(decltype(resourceApi.characterRelease))(image+CharacterReleaseRva),(decltype(resourceApi.characterReady))(image+CharacterReadyRva),(decltype(resourceApi.aiLoad))(image+AiLoadRva),(decltype(resourceApi.aiRelease))(image+AiReleaseRva),(decltype(resourceApi.aiReady))(image+AiReadyRva)};
  // 0.15: the keep-loaded engine patch (removal-queue hook at exe+0x35b9c0) is removed; it caused frequent crashes.
- if(MH_Initialize()!=MH_OK || MH_CreateHook((void*)(image+PathRva),(void*)Redirect,(void**)&originalPath)!=MH_OK || MH_CreateHook((void*)(image+FlagRva),(void*)GetFlag,(void**)&originalFlag)!=MH_OK||MH_CreateHook((void*)(image+NpcInputRva),(void*)HookNpcInput,(void**)&originalNpcInput)!=MH_OK||MH_CreateHook((void*)(image+BossGaugeSetupRva),(void*)HookBossGaugeSetup,(void**)&originalBossGaugeSetup)!=MH_OK||MH_CreateHook((void*)(image+BossGaugeUpdateRva),(void*)HookBossGaugeUpdate,(void**)&originalBossGaugeUpdate)!=MH_OK||MH_CreateHook((void*)(image+GeneratorResourceTickRva),(void*)HookGeneratorResourceTick,(void**)&originalGeneratorResourceTick)!=MH_OK||MH_CreateHook((void*)(image+CharacterUnloadRva),(void*)HookCharacterUnload,(void**)&originalCharacterUnload)!=MH_OK||MH_CreateHook((void*)(image+GeneratorLoadRva),(void*)HookGeneratorLoad,(void**)&originalGeneratorLoad)!=MH_OK||MH_CreateHook((void*)(image+GeneratorReleaseRva),(void*)HookGeneratorRelease,(void**)&originalGeneratorRelease)!=MH_OK||MH_CreateHook((void*)(image+GiveSoulsRva),(void*)HookGiveSouls,(void**)&originalGiveSouls)!=MH_OK||MH_CreateHook((void*)(image+DurabilityDamageRva),(void*)HookDurabilityDamage,(void**)&originalDurabilityDamage)!=MH_OK||MH_CreateHook((void*)(image+NpcVoiceRequestRva),(void*)HookNpcVoiceRequest,(void**)&originalNpcVoiceRequest)!=MH_OK||MH_CreateHook((void*)(image+NpcVoicePlayingRva),(void*)HookNpcVoicePlaying,(void**)&originalNpcVoicePlaying)!=MH_OK||MH_CreateHook((void*)(image+NpcVoiceStopRva),(void*)HookNpcVoiceStop,(void**)&originalNpcVoiceStop)!=MH_OK||MH_EnableHook(MH_ALL_HOOKS)!=MH_OK){MH_DisableHook(MH_ALL_HOOKS);MH_Uninitialize();Log("Hook activation failed; hooks removed.");return 8;}
- Log("Rosabeth private status/skin 990718; appearance unchanged; native Rosabeth combat via 991005, boot 80; live equipment sync remains disabled.");
- Trace("rosabeth_profile",",\"status\":990718,\"skin\":990718,\"armor\":[11001100,16510101,16510102,16510103],\"automatic_sync\":false");
- Trace("rosabeth_wardrobe_disabled",",\"reason\":\"native_equipment_crash\"");
+ if(MH_Initialize()!=MH_OK || MH_CreateHook((void*)(image+PathRva),(void*)Redirect,(void**)&originalPath)!=MH_OK || MH_CreateHook((void*)(image+FlagRva),(void*)GetFlag,(void**)&originalFlag)!=MH_OK||MH_CreateHook((void*)(image+BossGaugeSetupRva),(void*)HookBossGaugeSetup,(void**)&originalBossGaugeSetup)!=MH_OK||MH_CreateHook((void*)(image+BossGaugeUpdateRva),(void*)HookBossGaugeUpdate,(void**)&originalBossGaugeUpdate)!=MH_OK||MH_CreateHook((void*)(image+GeneratorResourceTickRva),(void*)HookGeneratorResourceTick,(void**)&originalGeneratorResourceTick)!=MH_OK||MH_CreateHook((void*)(image+CharacterUnloadRva),(void*)HookCharacterUnload,(void**)&originalCharacterUnload)!=MH_OK||MH_CreateHook((void*)(image+GeneratorLoadRva),(void*)HookGeneratorLoad,(void**)&originalGeneratorLoad)!=MH_OK||MH_CreateHook((void*)(image+GeneratorReleaseRva),(void*)HookGeneratorRelease,(void**)&originalGeneratorRelease)!=MH_OK||MH_CreateHook((void*)(image+GiveSoulsRva),(void*)HookGiveSouls,(void**)&originalGiveSouls)!=MH_OK||MH_CreateHook((void*)(image+DurabilityDamageRva),(void*)HookDurabilityDamage,(void**)&originalDurabilityDamage)!=MH_OK||MH_CreateHook((void*)(image+NpcVoiceRequestRva),(void*)HookNpcVoiceRequest,(void**)&originalNpcVoiceRequest)!=MH_OK||MH_CreateHook((void*)(image+NpcVoicePlayingRva),(void*)HookNpcVoicePlaying,(void**)&originalNpcVoicePlaying)!=MH_OK||MH_CreateHook((void*)(image+NpcVoiceStopRva),(void*)HookNpcVoiceStop,(void**)&originalNpcVoiceStop)!=MH_OK||MH_EnableHook(MH_ALL_HOOKS)!=MH_OK){MH_DisableHook(MH_ALL_HOOKS);MH_Uninitialize();Log("Hook activation failed; hooks removed.");return 8;}
+ Log("Rosabeth private status/skin 990718: donation globals update only the constructor armor profile for her next safe spawn; live equipment/model refresh disabled.");
  heraldMenuLayoutReady=true;resourceLayoutReady=true;
  HANDLE t=CreateThread(nullptr,0,Companion,nullptr,0,nullptr);if(!t)return 9;CloseHandle(t);
  t=CreateThread(nullptr,0,Keys,nullptr,0,nullptr);if(!t)return 9;CloseHandle(t);
  t=CreateThread(nullptr,0,HookLater,nullptr,0,nullptr);if(t)CloseHandle(t);
- Log("Native combat profiles: source attack/spell trees retained; native targeting restored except host lock-on guard. No added search radius, combat leash or fast targeting timers.");
+ Log("Native combat profiles: source attack/spell trees retained; native targeting restored except host lock-on guard. Combat target retained up to 100 m while alive and visible or attacking; host follow scan leash 35 m. Native attacks/spells retained; companion boss-fog checks removed.");
  Log("Initialization complete: %d NPCs available. F7 menu, F8 bring all.",RosterCount);return 0;
 }
-BOOL WINAPI DllMain(HINSTANCE h,DWORD why,void*) {if(why==DLL_PROCESS_ATTACH){selfModule=h;DisableThreadLibraryCalls(h);}return TRUE;}
+static DWORD WINAPI PluginStart(void*){DWORD r=Initialize(nullptr);if(r)Log("Plugin startup refused (%lu).",r);return r;}
+BOOL WINAPI DllMain(HINSTANCE h,DWORD why,void*) {
+ if(why==DLL_PROCESS_ATTACH){selfModule=h;DisableThreadLibraryCalls(h);
+  // The bundled dinput8 proxy sets this variable and calls Initialize itself. Any other loader (Lazy Loader dllMods,
+  // chainloaders) gets the early animation-pool patch here and a startup thread.
+  wchar_t flag[4];if(!GetEnvironmentVariableW(L"NPCCOMPANIONS_BOOTSTRAP",flag,4)){pluginMode=true;ExpandAnimationPoolBeforeStartup((uintptr_t)GetModuleHandleW(nullptr));HANDLE t=CreateThread(nullptr,0,PluginStart,nullptr,0,nullptr);if(t)CloseHandle(t);}
+ }
+ return TRUE;
+}
 
 

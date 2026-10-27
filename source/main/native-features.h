@@ -1,8 +1,15 @@
 #pragma once
 // All entry points and layouts below are pinned to version.h's executable signatures.
-using NpcInputFn=void(*)(uintptr_t);
-static NpcInputFn originalNpcInput;
-static void HookNpcInput(uintptr_t node){originalNpcInput(node);AfterNativeNpcInput(node);}
+static int ReadAnimation(uintptr_t actor) {
+ uintptr_t p=actor;for(unsigned offset:{0xf8u,0x38u,0x78u,0x20u})if(!ReadPtr(p+offset,p)||!UserPointer(p))return -1;
+ int id=-1;return ReadI32(p+0x10,id)?id:-1;
+}
+
+static uintptr_t CompanionAi(uintptr_t player,const Slot& slot) {
+ if(!OwnedCompanion(player,slot))return 0;uintptr_t gm=0,ai=0,node=0;
+ if(!ReadPtr(image+GameManagerRva,gm)||!ReadPtr(gm+0x28,ai)||!ReadPtr(ai+0x10,node))return 0;
+ for(int i=0;node&&i<1024;i++){uintptr_t ctrl=0,next=0;if(!ReadPtr(node+0x38,ctrl))return 0;if(ctrl==slot.ctrl)return node;if(!ReadPtr(node+0x10,next)||next==node)break;node=next;}return 0;
+}
 
 // The companion's private talk/text IDs are not native FMOD events. Route
 // only its private voice IDs to the existing Majula Herald events. The audio
@@ -73,6 +80,7 @@ static bool CorrectBossGauge(uintptr_t scene,float mode){
 }
 static void HookBossGaugeUpdate(uintptr_t scene,float dt){
  CorrectBossGauge(scene,enemyHpMultiplier.load());originalBossGaugeUpdate(scene,dt);
+ ObserveBossRoomGauge(scene);
 }
 
 static bool heraldMenuLayoutReady=false;
