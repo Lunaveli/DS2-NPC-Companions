@@ -1,4 +1,4 @@
-# NPC Spawner with Progression 1.0.1 (base and Seeker of Fire Edition) - source code
+# NPC Companions (Progression) 1.0.2 (base and Seeker of Fire Edition; internal name NPC Spawner) - source code
 
 Source for the compiled files in the Nexus Mods downloads (Dark Souls II: Scholar of the First Sin, Windows x64,
 Steam, executable 1.0.3.0). `main/` builds the base-game files, `seeker/` the Seeker of Fire files.
@@ -17,10 +17,10 @@ Steam, executable 1.0.3.0). `main/` builds the base-game files, `seeker/` the Se
 3. `build.cmd main` or `build.cmd seeker` -> `out/<variant>/`. MSVC embeds timestamps, so rebuilds are not byte-identical.
 
 ## Release checksums (SHA-256)
-- `NPCSpawner-1.0.1.zip` / `dll/NPCSpawner.dll`: `1c8445fd816b2a1118c23e7db1ff206204c76c284fd6b5aa91afc5373401114c`
-- `NPCSpawner-1.0.1.zip` / `loader/Game/dinput8.dll`: `71f045030860a951600a3fc498ae9aaf8c2e36ad6e25fea042d16a188c276f8c`
-- `NPCSpawner-Seeker-1.0.1.zip` / `dll/NPCSpawner.dll`: `dc4855c14ce0d9cdf590f1d5e66b590b17b042eab9558b82756847eabc9269ef`
-- `NPCSpawner-Seeker-1.0.1.zip` / `loader/Game/dinput8.dll`: `4a1cf691ab4ee6294b3b49dd02471e6527c708fa9930d3338c6d6f7dcb4cb46f`
+- `NPCCompanionsProgression-1.0.2.zip` / `dll/NPCSpawner.dll`: `54d8f2118576b343c3670ad36a8790e9a6d3217a7dd4d95618850ee5a0ee2aa9`
+- `NPCCompanionsProgression-1.0.2.zip` / `loader/Game/dinput8.dll`: `40601ba6e5ff6737a9346719f0552af888da7eaba80d013a914177b59100b6e0`
+- `NPCCompanionsProgression-Seeker-1.0.2.zip` / `dll/NPCSpawner.dll`: `6e4ebaad8894f754eceb6661c86d5379429c993a3713e73ff5f0c8e2ffa04909`
+- `NPCCompanionsProgression-Seeker-1.0.2.zip` / `loader/Game/dinput8.dll`: `18df382895ce6237e5584ec8b7b56ded2a394ca3130375d7ad90275858c0763f`
 
 ## Licenses
 Dear ImGui: MIT (`third_party/imgui/LICENSE.txt`). MinHook: BSD-2-Clause (not included).

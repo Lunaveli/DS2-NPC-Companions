@@ -1043,7 +1043,7 @@ static void DrawOverlay() {
  static bool menuSizeLoaded=false;static ImVec2 menuSize;
  if(!menuSizeLoaded){menuSize=ImVec2((float)GetPrivateProfileIntW(L"overlay",L"menuWidth",1250,ini.c_str())*scale,(float)GetPrivateProfileIntW(L"overlay",L"menuHeight",820,ini.c_str())*scale);menuSizeLoaded=true;}
  ImGui::SetNextWindowSize(menuSize,ImGuiCond_FirstUseEver);ImGui::SetNextWindowSizeConstraints(ImVec2(760*scale,420*scale),ImVec2(100000.0f,100000.0f));
- ImGui::Begin("NPC Spawner with Progression  (F7 to close)",nullptr,ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings);
+ ImGui::Begin("NPC Companions (Progression)  (F7 to close)",nullptr,ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoSavedSettings);
  // Drag an edge or the corner to resize; the size is kept in settings.ini once the mouse is released.
  {ImVec2 now=ImGui::GetWindowSize();if((now.x!=menuSize.x||now.y!=menuSize.y)&&!ImGui::IsMouseDown(0)){menuSize=now;wchar_t v[16];swprintf_s(v,L"%d",(int)(now.x/scale));WritePrivateProfileStringW(L"overlay",L"menuWidth",v,ini.c_str());swprintf_s(v,L"%d",(int)(now.y/scale));WritePrivateProfileStringW(L"overlay",L"menuHeight",v,ini.c_str());}}
  ImGui::SeparatorText("Party (summon, dismiss, bring)");
@@ -1223,9 +1223,9 @@ static DWORD InitializeOnce() {
  image=(uintptr_t)GetModuleHandleW(nullptr);ownPid=GetCurrentProcessId();
  SYSTEMTIME journalTime;GetSystemTime(&journalTime);wchar_t journalName[160];swprintf_s(journalName,L"\\logs\\session-%04u%02u%02u-%02u%02u%02u-%lu.jsonl",journalTime.wYear,journalTime.wMonth,journalTime.wDay,journalTime.wHour,journalTime.wMinute,journalTime.wSecond,ownPid);
  CreateDirectoryW((root+L"\\logs").c_str(),nullptr);tracePath=root+journalName;
- Trace("session_start",",\"version\":\"spawner-1.0.1-seeker\",\"schema\":1,\"exe_sha256_expected\":\"0045931b8914504531b7864a9488d396dc50cbaf524964016e1d69c3d1173131\"");
- Log("==== NPC Spawner with Progression 1.0.1 test build (Seeker of Fire) - tabs, unlocks, titanite upgrades, loader support ====");
- if(GetModuleHandleW(L"NPCCompanions.dll")){Log("NPC Companions is also loaded. Disable one of the two mods; refusing startup.");return 13;}
+ Trace("session_start",",\"version\":\"spawner-1.0.2-seeker\",\"schema\":1,\"exe_sha256_expected\":\"0045931b8914504531b7864a9488d396dc50cbaf524964016e1d69c3d1173131\"");
+ Log("==== NPC Companions (Progression) 1.0.2 test build (Seeker of Fire) - tabs, unlocks, titanite upgrades, loader support ====");
+ if(GetModuleHandleW(L"NPCCompanions.dll")){Log("The original NPC Companions mod is also loaded. Disable one of the two mods; refusing startup.");return 13;}
  if(pluginMode)Log("Loaded as a plugin (dllMods / Lazy Loader).");
  {bool expanded=false;if(!AnimationPoolPatchState(image,expanded)||!expanded){if(pluginMode)Log("WARNING: animation pool expansion unavailable (the loader started this mod late). Large areas such as No-man's Wharf may crash; use the bundled loader if they do.");else{Log("Animation registry capacity patch missing; refusing companion startup.");return 11;}}int capacity=0,available=0;if(ReadAnimationPoolUsage(image,capacity,available)&&capacity!=(int)AnimationPoolCapacity){Log("Animation registry initialized too early with capacity %d; refusing companion startup.",capacity);return 12;}Log("Animation resource registry: constructor capacity %u, allocation %u bytes; all three operands verified.",AnimationPoolCapacity,AnimationPoolBytes);}
  size_t verifiedBase=0;if(!ValidateSeekerInputs(seekerBase,verifiedBase)){Log("Seeker base fingerprint mismatch after %zu inputs; reinstall the matching compatibility patch. No hooks enabled.",verifiedBase);return 10;}

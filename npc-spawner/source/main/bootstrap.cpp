@@ -8,7 +8,7 @@ static const wchar_t* payloadFolder=L"\\NPCSpawner";
 static HMODULE module;
 static INIT_ONCE once=INIT_ONCE_STATIC_INIT;
 extern "C" {uintptr_t originalExports[6]={};}
-static void Fail(const wchar_t* message){MessageBoxW(nullptr,message,L"NPC Spawner Bootstrap",MB_ICONERROR);ExitProcess(1);}
+static void Fail(const wchar_t* message){MessageBoxW(nullptr,message,L"NPC Companions (Progression) Bootstrap",MB_ICONERROR);ExitProcess(1);}
 static BOOL CALLBACK Initialize(PINIT_ONCE,void*,void**) {
  wchar_t system[MAX_PATH];GetSystemDirectoryW(system,MAX_PATH);wcscat_s(system,L"\\dinput8.dll");HMODULE real=LoadLibraryW(system);if(!real)Fail(L"Windows DirectInput could not be loaded.");
  const char* names[]={"DirectInput8Create","DllCanUnloadNow","DllGetClassObject","DllRegisterServer","DllUnregisterServer","GetdfDIJoystick"};
